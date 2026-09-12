@@ -7,6 +7,18 @@ import folium
 from streamlit_folium import st_folium
 
 try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
+try:
+    from transformers import pipeline
+    VISION_AI_AVAILABLE = True
+except ImportError:
+    VISION_AI_AVAILABLE = False
+
+try:
     from streamlit_geolocation import streamlit_geolocation
     GPS_AVAILABLE = True
 except ImportError:
@@ -119,7 +131,23 @@ TEXT = {
         "save": "Save",
         "exists": "That Bin ID already exists.",
         "required_bin": "Bin ID and location are required.",
-        "refresh": "Refresh"
+        "refresh": "Refresh",
+        "waste_check": "AI Waste Check",
+        "waste_check_title": "♻️ AI Waste Check",
+        "waste_check_subtitle": "Not sure which bin your waste belongs in? Take a photo and get a disposal recommendation.",
+        "take_photo": "Take a photo",
+        "upload_photo": "Upload a photo",
+        "analyze": "Analyze Waste",
+        "detected": "Detected item",
+        "category": "Recommended category",
+        "confidence": "Confidence",
+        "instruction": "For best results, show one waste item clearly. Mixed bags or waste piles may be uncertain.",
+        "uncertain": "Low confidence. Please separate the waste and scan one item at a time.",
+        "ai_not_ready": "Vision AI is not available in this deployment. You can still use the manual waste guide below.",
+        "manual_guide": "Manual Waste Guide",
+        "scan_success": "Waste analyzed successfully.",
+        "camera": "Camera",
+        "photo_upload": "Photo upload"
     },
 
     "Tamil": {
@@ -205,7 +233,23 @@ TEXT = {
         "save": "Save",
         "exists": "இந்த குப்பைத்தொட்டி அடையாள எண் ஏற்கனவே உள்ளது.",
         "required_bin": "குப்பைத்தொட்டி அடையாள எண் மற்றும் இருப்பிடம் கட்டாயம்.",
-        "refresh": "புதுப்பி"
+        "refresh": "புதுப்பி",
+        "waste_check": "AI கழிவு சரிபார்ப்பு",
+        "waste_check_title": "♻️ AI கழிவு சரிபார்ப்பு",
+        "waste_check_subtitle": "இந்த கழிவை எந்த தொட்டியில் போடுவது என்று தெரியவில்லையா? புகைப்படம் எடுத்து பரிந்துரையை பெறுங்கள்.",
+        "take_photo": "புகைப்படம் எடுக்க",
+        "upload_photo": "புகைப்படத்தை பதிவேற்ற",
+        "analyze": "கழிவை பகுப்பாய்வு செய்",
+        "detected": "கண்டறியப்பட்ட பொருள்",
+        "category": "பரிந்துரைக்கப்படும் வகை",
+        "confidence": "நம்பகத்தன்மை",
+        "instruction": "சிறந்த முடிவுக்கு ஒரு கழிவுப் பொருளை தெளிவாகக் காட்டவும். கலந்த கழிவு மூட்டை அல்லது குவியலுக்கு முடிவு உறுதியாக இருக்காது.",
+        "uncertain": "நம்பகத்தன்மை குறைவாக உள்ளது. கழிவுகளை பிரித்து ஒரு பொருளாக scan செய்யவும்.",
+        "ai_not_ready": "இந்த deployment-ல் Vision AI கிடைக்கவில்லை. கீழே உள்ள manual waste guide-ஐ பயன்படுத்தலாம்.",
+        "manual_guide": "Manual Waste Guide",
+        "scan_success": "கழிவு வெற்றிகரமாக பகுப்பாய்வு செய்யப்பட்டது.",
+        "camera": "Camera",
+        "photo_upload": "Photo upload"
     }
 }
 
@@ -499,6 +543,76 @@ def get_road_route(points):
 
 
 # ============================================================
+# AI WASTE VISION
+# ============================================================
+
+@st.cache_resource(show_spinner=False)
+def load_waste_vision_model():
+    """Load a zero-shot image classifier only when available."""
+    if not VISION_AI_AVAILABLE:
+        return None
+    try:
+        return pipeline(
+            "zero-shot-image-classification",
+            model="openai/clip-vit-base-patch32"
+        )
+    except Exception:
+        return None
+
+
+def classify_waste_image(image):
+    """
+    AI-assisted waste classification.
+    Returns the top candidate, category, confidence and all scores.
+    """
+    model = load_waste_vision_model()
+
+    if model is None:
+        return None
+
+    candidates = [
+        ("banana peel", "Organic / Wet Waste"),
+        ("vegetable or food waste", "Organic / Wet Waste"),
+        ("food scraps", "Organic / Wet Waste"),
+        ("plastic bottle", "Recyclable Waste"),
+        ("plastic container", "Recyclable Waste"),
+        ("paper or cardboard", "Dry Waste"),
+        ("metal can", "Recyclable Waste"),
+        ("glass bottle", "Recyclable Waste"),
+        ("cloth or textile", "Dry Waste"),
+        ("electronic waste", "Other / Reject Waste"),
+        ("mixed waste bag", "Other / Reject Waste"),
+        ("general garbage", "Other / Reject Waste"),
+    ]
+
+    labels = [item[0] for item in candidates]
+
+    try:
+        results = model(image, candidate_labels=labels)
+        if not results:
+            return None
+
+        top = results[0]
+        label = top["label"]
+        score = float(top["score"])
+
+        category = next(
+            category
+            for candidate, category in candidates
+            if candidate == label
+        )
+
+        return {
+            "item": label.title(),
+            "category": category,
+            "confidence": score,
+            "scores": results,
+        }
+    except Exception:
+        return None
+
+
+# ============================================================
 # STATUS
 # ============================================================
 
@@ -704,9 +818,80 @@ if page == t("home"):
 
 elif page == t("seg"):
 
-    st.header(
-        "♻️ " + t("seg")
-    )
+    st.header(t("waste_check_title"))
+    st.caption(t("waste_check_subtitle"))
+
+    st.info("💡 " + t("instruction"))
+
+    left, right = st.columns(2)
+
+    with left:
+        st.subheader("📷 " + t("take_photo"))
+        camera_image = st.camera_input(t("camera"))
+
+    with right:
+        st.subheader("📁 " + t("upload_photo"))
+        uploaded_image = st.file_uploader(
+            t("photo_upload"),
+            type=["jpg", "jpeg", "png"],
+            key="waste_image_upload"
+        )
+
+    selected_image = camera_image if camera_image is not None else uploaded_image
+
+    if selected_image is not None:
+        if PIL_AVAILABLE:
+            image = Image.open(selected_image).convert("RGB")
+            st.image(
+                image,
+                caption=t("photo_upload"),
+                use_container_width=True
+            )
+
+            if st.button(
+                "🔍 " + t("analyze"),
+                type="primary",
+                use_container_width=True
+            ):
+                with st.spinner("Analyzing..." if st.session_state.language == "English" else "பகுப்பாய்வு செய்கிறது..."):
+                    result = classify_waste_image(image)
+
+                if result is None:
+                    st.warning(t("ai_not_ready"))
+                else:
+                    confidence = result["confidence"]
+
+                    if confidence >= 0.60:
+                        st.success(t("scan_success"))
+
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric(
+                            t("detected"),
+                            result["item"]
+                        )
+                        c2.metric(
+                            t("category"),
+                            result["category"]
+                        )
+                        c3.metric(
+                            t("confidence"),
+                            f"{confidence * 100:.0f}%"
+                        )
+
+                        st.progress(
+                            min(1.0, confidence)
+                        )
+
+                        if confidence < 0.80:
+                            st.warning(t("uncertain"))
+                    else:
+                        st.warning(t("uncertain"))
+        else:
+            st.error("Pillow is required for image analysis.")
+
+    st.divider()
+
+    st.subheader("🧭 " + t("manual_guide"))
 
     waste_types = [
         t("organic"),
@@ -717,17 +902,15 @@ elif page == t("seg"):
 
     selected = st.selectbox(
         t("select"),
-        waste_types
+        waste_types,
+        key="manual_waste_type"
     )
 
     st.success(
-        f"**{t('recommended')}:** "
-        f"{selected}"
+        f"**{t('recommended')}:** {selected}"
     )
 
-    st.subheader(
-        "Segregation Monitoring"
-    )
+    st.subheader("📊 Segregation Monitoring")
 
     stats = data.get(
         "segregation",
