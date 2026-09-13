@@ -1,555 +1,126 @@
-import math
-from datetime import datetime
-
-import requests
 import streamlit as st
+import requests, math
+from datetime import datetime
+import pandas as pd
 import folium
 from streamlit_folium import st_folium
 
 try:
     from PIL import Image
-    PIL_AVAILABLE = True
-except ImportError:
-    PIL_AVAILABLE = False
+except Exception:
+    Image = None
 
 try:
     from transformers import pipeline
-    VISION_AI_AVAILABLE = True
-except ImportError:
-    VISION_AI_AVAILABLE = False
+except Exception:
+    pipeline = None
 
-try:
-    from streamlit_geolocation import streamlit_geolocation
-    GPS_AVAILABLE = True
-except ImportError:
-    GPS_AVAILABLE = False
+st.set_page_config(page_title="EcoNova | Smart Waste", page_icon="♻️", layout="wide")
 
+# -------------------- ATTRACTIVE UI --------------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html,body,[class*="css"]{font-family:Inter,sans-serif}
+.stApp{background:radial-gradient(circle at 10% 0%,rgba(34,197,94,.12),transparent 28%),radial-gradient(circle at 95% 5%,rgba(14,165,233,.10),transparent 25%),#07110d;color:#edf8f0}
+[data-testid="stSidebar"]{background:linear-gradient(180deg,#07130e,#0d2117);border-right:1px solid rgba(255,255,255,.08)}
+[data-testid="stSidebar"] *{color:#eaf6ee!important}
+.block-container{max-width:1450px;padding-top:2.5rem;padding-bottom:2rem}
+.hero{padding:32px;border-radius:26px;background:linear-gradient(135deg,#123522,#091c14);border:1px solid rgba(94,229,140,.20);box-shadow:0 18px 60px #0005;margin-bottom:24px}
+.hero .eyebrow{color:#60e58e;font-size:11px;font-weight:800;letter-spacing:2px}
+.hero h1{font-size:43px;font-weight:800;letter-spacing:-1.8px;margin:7px 0}
+.hero p{color:#a9c5b3;font-size:15px;margin:0;max-width:900px}
+.card{padding:20px;border-radius:20px;background:linear-gradient(145deg,#142b20,#0b1d15);border:1px solid #ffffff10;min-height:135px;box-shadow:0 10px 35px #0003}
+.card small{color:#8da99a}.card b{display:block;font-size:30px;margin-top:7px}.card span{color:#759284;font-size:11px}
+.feature{padding:22px;border-radius:20px;background:#0d2419;border:1px solid #ffffff0d;min-height:175px}
+.feature .icon{font-size:28px}.feature h3{font-size:17px}.feature p{color:#8da698;font-size:13px;line-height:1.55}
+.section{margin:27px 0 13px}.section h2{font-size:22px;margin:0}.section p{color:#829d8d;margin:4px 0}
+.progress{height:8px;background:#162a21;border-radius:99px;overflow:hidden}.progress div{height:100%;background:linear-gradient(90deg,#35d878,#73e7a0);border-radius:99px}
+.pill{display:inline-block;padding:6px 11px;border-radius:99px;font-size:11px;font-weight:700}
+.green{background:#22c55e18;color:#6ee79a}.yellow{background:#f59e0b18;color:#f8c66a}.red{background:#ef444418;color:#ff8d8d}
+.notice{padding:14px 16px;border-radius:14px;background:#38bdf80d;border:1px solid #38bdf822;color:#b7dff0;font-size:13px}
+div[data-testid="stButton"]>button{border-radius:12px;background:#10271a;border:1px solid #ffffff12;color:#edf8f0;font-weight:650}
+.footer{text-align:center;color:#5f7d6d;border-top:1px solid #ffffff0d;padding-top:18px;margin-top:45px;font-size:11px}
+</style>
+""", unsafe_allow_html=True)
 
-# ============================================================
-# PAGE CONFIG
-# ============================================================
+# -------------------- FIREBASE --------------------
+FIREBASE_URL = "https://econova-8e761-default-rtdb.asia-southeast1.firebasedatabase.app"
 
-st.set_page_config(
-    page_title="EcoNova",
-    page_icon="♻️",
-    layout="wide"
-)
+DEMO_BINS = [
+    {"id":"BIN001","area":"Gandhi Road","fill":25,"lat":11.0168,"lon":76.9558,"sensor":"Online","collection":"Scheduled","assigned_vehicle":"Not assigned","assigned_person":"Not assigned"},
+    {"id":"BIN002","area":"Bus Stand","fill":55,"lat":11.0183,"lon":76.9725,"sensor":"Online","collection":"Scheduled","assigned_vehicle":"Not assigned","assigned_person":"Not assigned"},
+    {"id":"BIN003","area":"Market Area","fill":82,"lat":11.0046,"lon":76.9616,"sensor":"Online","collection":"Ready","assigned_vehicle":"EV-02","assigned_person":"Ravi Kumar"},
+    {"id":"BIN004","area":"Railway Station Road","fill":95,"lat":11.0270,"lon":76.9563,"sensor":"Online","collection":"Urgent","assigned_vehicle":"EV-01","assigned_person":"Arun Team"},
+]
 
-FIREBASE_URL = (
-    "https://econova-8e761-default-rtdb."
-    "asia-southeast1.firebasedatabase.app"
-)
+DEMO_REPORTS = [
+    {"id":"REP001","type":"Overflowing bin","location":"Market Area","description":"Bin is nearly full.","status":"Resolved","progress":100,"reported":"Today, 10:20","assigned_team":"Sanitation Team A","assigned_person":"Ravi Kumar"},
+    {"id":"REP002","type":"Uncollected waste","location":"Railway Station Road","description":"Collection is pending.","status":"Work in Progress","progress":65,"reported":"Today, 11:05","assigned_team":"Sanitation Team B","assigned_person":"Arun Team"},
+]
 
-TIMEOUT = 5
-
-
-# ============================================================
-# TRANSLATION
-# ============================================================
-
-TEXT = {
-    "English": {
-        "home": "Home",
-        "seg": "Waste Segregation",
-        "bins": "Smart Bins",
-        "report": "Report Issue",
-        "my": "My Reports",
-        "dashboard": "Admin Dashboard",
-        "issues": "Issue Reports",
-        "route": "Smart Route Planning",
-        "manage": "Manage Bins",
-        "language": "Language",
-        "portal": "Portal",
-        "user": "User",
-        "admin": "Admin",
-        "welcome": "Welcome to EcoNova",
-        "tagline": "Smart Waste Segregation, Disposal & Sanitation Platform",
-        "description": "A digital platform for smart waste collection and improved sanitation.",
-        "organic": "Organic / Wet Waste",
-        "dry": "Dry Waste",
-        "recycle": "Recyclable Waste",
-        "other": "Other / Reject",
-        "select": "Select waste type",
-        "recommended": "Recommended category",
-        "issue_type": "Issue type",
-        "overflow": "Overflowing bin",
-        "unclean": "Unclean area",
-        "uncollected": "Uncollected waste",
-        "sanitation": "Other sanitation issue",
-        "issue_location": "Issue location",
-        "gps": "Current location - GPS",
-        "different": "Different location",
-        "area": "Area",
-        "street": "Street",
-        "landmark": "Landmark",
-        "details": "Description",
-        "photo": "Photo (optional)",
-        "submit": "Submit report",
-        "success": "Report submitted successfully.",
-        "need_description": "Please enter a description.",
-        "need_location": "Please provide Area, Street, or Landmark.",
-        "gps_permission": "Allow browser location permission.",
-        "gps_unavailable": "GPS is unavailable. Please enter the issue location manually.",
-        "fill": "Fill Level",
-        "sensor": "Sensor",
-        "hardware": "Hardware",
-        "collection": "Collection",
-        "status": "Status",
-        "normal": "Normal",
-        "ready": "Ready for collection",
-        "full": "FULL - URGENT",
-        "online": "Online",
-        "healthy": "Healthy",
-        "pending": "Pending",
-        "collected": "Collected",
-        "alert": "Automatic Alerts",
-        "no_alert": "No active automatic alerts.",
-        "demo": "Prototype demo data",
-        "demo_note": "These bin readings are demo values, not live sensor readings.",
-        "hardware_note": "A real smart bin can send sensor readings through sensor → ESP32 → Wi-Fi → Firebase. The admin portal monitors those readings.",
-        "total": "Total Bins",
-        "urgent": "Urgent Bins",
-        "open": "Open Issues",
-        "resolved": "Resolved Issues",
-        "route_note": "High-fill bins receive higher priority. The system then requests an actual road route between the collection depot and the selected bins.",
-        "route_map": "Actual Road Route",
-        "distance": "Road distance",
-        "time": "Estimated travel time",
-        "priority": "Priority",
-        "stop": "Stop",
-        "team": "Collection team",
-        "assign": "Assign route",
-        "assigned": "Route assigned successfully.",
-        "no_route": "No bins currently need collection.",
-        "status_update": "Update",
-        "progress": "Progress",
-        "no_reports": "No reports yet.",
-        "register": "Register New Bin",
-        "bin_id": "Bin ID",
-        "bin_location": "Bin location",
-        "initial_fill": "Initial fill level %",
-        "save": "Save",
-        "exists": "That Bin ID already exists.",
-        "required_bin": "Bin ID and location are required.",
-        "refresh": "Refresh",
-        "waste_check": "AI Waste Check",
-        "waste_check_title": "♻️ AI Waste Check",
-        "waste_check_subtitle": "Not sure which bin your waste belongs in? Take a photo and get a disposal recommendation.",
-        "take_photo": "Take a photo",
-        "upload_photo": "Upload a photo",
-        "analyze": "Analyze Waste",
-        "detected": "Detected item",
-        "category": "Recommended category",
-        "confidence": "Confidence",
-        "instruction": "For best results, show one waste item clearly. Mixed bags or waste piles may be uncertain.",
-        "uncertain": "Low confidence. Please separate the waste and scan one item at a time.",
-        "ai_not_ready": "Vision AI is not available in this deployment. You can still use the manual waste guide below.",
-        "manual_guide": "Manual Waste Guide",
-        "scan_success": "Waste analyzed successfully.",
-        "camera": "Camera",
-        "photo_upload": "Photo upload"
-    },
-
-    "Tamil": {
-        "home": "முகப்பு",
-        "seg": "கழிவு வகைப்படுத்தல்",
-        "bins": "ஸ்மார்ட் குப்பைத்தொட்டிகள்",
-        "report": "பிரச்சினையை தெரிவிக்க",
-        "my": "எனது புகார்கள்",
-        "dashboard": "நிர்வாகக் கட்டுப்பாட்டுப் பலகை",
-        "issues": "புகார்கள்",
-        "route": "திறமையான வழித்தடத் திட்டமிடல்",
-        "manage": "குப்பைத்தொட்டிகளை நிர்வகி",
-        "language": "மொழி",
-        "portal": "இணையதளம்",
-        "user": "பயனர்",
-        "admin": "நிர்வாகி",
-        "welcome": "EcoNova-க்கு வரவேற்கிறோம்",
-        "tagline": "ஸ்மார்ட் கழிவு பிரித்தல், அகற்றுதல் மற்றும் தூய்மை மேலாண்மை தளம்",
-        "description": "ஸ்மார்ட் கழிவு சேகரிப்பு மற்றும் சிறந்த தூய்மை மற்றும் சுகாதார மேலாண்மைக்கான டிஜிட்டல் தளம்.",
-        "organic": "மக்கும் / ஈரக் கழிவு",
-        "dry": "உலர் கழிவு",
-        "recycle": "மறுசுழற்சி கழிவு",
-        "other": "மற்றவை / Reject",
-        "select": "கழிவு வகையை தேர்வு செய்யவும்",
-        "recommended": "பரிந்துரைக்கப்படும் வகை",
-        "issue_type": "பிரச்சினை வகை",
-        "overflow": "நிரம்பிய குப்பைத்தொட்டி",
-        "unclean": "சுத்தமில்லாத பகுதி",
-        "uncollected": "சேகரிக்கப்படாத கழிவு",
-        "sanitation": "மற்ற சுகாதாரப் பிரச்சினை",
-        "issue_location": "பிரச்சினை இருக்கும் இடம்",
-        "gps": "தற்போதைய இடம் - GPS",
-        "different": "வேறு இடம்",
-        "area": "பகுதி",
-        "street": "தெரு",
-        "landmark": "அடையாள இடம்",
-        "details": "விவரம்",
-        "photo": "புகைப்படம் (விருப்பம்)",
-        "submit": "புகாரை சமர்ப்பிக்க",
-        "success": "புகார் வெற்றிகரமாக சமர்ப்பிக்கப்பட்டது.",
-        "need_description": "விவரத்தை உள்ளிடவும்.",
-        "need_location": "பகுதி, தெரு  அல்லது அடையாள இடம் வழங்கவும்.",
-        "gps_permission": "Browser location permission கொடுக்கவும்.",
-        "gps_unavailable": "GPS கிடைக்கவில்லை. Location-ஐ manually உள்ளிடவும்.",
-        "fill": "நிரம்பிய அளவு",
-        "sensor": "உணர்வி",
-        "hardware": "வன்பொருள்",
-        "collection": "சேகரிப்பு",
-        "status": "நிலை",
-        "normal": "சாதாரணம்",
-        "ready": "சேகரிப்புக்கு தயாராக உள்ளது",
-        "full": "முழுமை - அவசரம்",
-        "online": "Online",
-        "healthy": "Healthy",
-        "pending": "நிலுவையில்",
-        "collected": "சேகரிக்கப்பட்டது",
-        "alert": "தானியங்கி எச்சரிக்கைகள்",
-        "no_alert": "செயலில் தானியங்கி எச்சரிக்கைகள் இல்லை.",
-        "demo": "முன்மாதிரி செயல்விளக்கத் தரவு",
-        "demo_note": "இந்த குப்பைத்தொட்டி அளவீடுகள் மாதிரி (Demo) மதிப்புகள்; நேரடி சென்சார் அளவீடுகள் அல்ல.",
-        "hardware_note": "Real smart bin-ல் sensor → ESP32 → Wi-Fi → Firebase மூலம் readings அனுப்பலாம். Admin portal அதை monitor செய்யும்.",
-        "total": "மொத்த குப்பைத்தொட்டிகள்",
-        "urgent": "அவசர குப்பைத்தொட்டிகள்",
-        "open": "தீர்க்கப்படாத சிக்கல்கள்",
-        "resolved": "தீர்க்கப்பட்ட சிக்கல்கள்",
-        "route_note": "அதிகமாக நிரம்பிய bins-க்கு அதிக முன்னுரிமை கொடுக்கப்படும். பிறகு collection depot-ல் இருந்து selected bins வரை actual road route பெறப்படும்.",
-        "route_map": "உண்மையான சாலை வழித்தடம்",
-        "distance": "சாலை தூரம்",
-        "time": "மதிப்பிடப்பட்ட பயண நேரம்",
-        "priority": "முன்னுரிமை",
-        "stop": "நிறுத்தம்",
-        "team": "சேகரிப்புக் குழு",
-        "assign": "வழித்தடத்தை ஒதுக்கவும்",
-        "assigned": "வழித்தடம் வெற்றிகரமாக ஒதுக்கப்பட்டது.",
-        "no_route": "இப்போது சேகரிப்பு தேவைப்படும் குப்பைத்தொட்டிகள் இல்லை.",
-        "status_update": "புதுப்பிப்பு",
-        "progress": "முன்னேற்றம்",
-        "no_reports": "புகார்கள் இல்லை.",
-        "register": "புதிய குப்பைத்தொட்டி பதிவு",
-        "bin_id": "குப்பைத்தொட்டி அடையாள எண்",
-        "bin_location": "குப்பைத்தொட்டி இருக்கும் இடம்",
-        "initial_fill": "ஆரம்ப நிரப்பப்பட்ட அளவு %",
-        "save": "Save",
-        "exists": "இந்த குப்பைத்தொட்டி அடையாள எண் ஏற்கனவே உள்ளது.",
-        "required_bin": "குப்பைத்தொட்டி அடையாள எண் மற்றும் இருப்பிடம் கட்டாயம்.",
-        "refresh": "புதுப்பி",
-        "waste_check": "AI கழிவு சரிபார்ப்பு",
-        "waste_check_title": "♻️ AI கழிவு சரிபார்ப்பு",
-        "waste_check_subtitle": "இந்த கழிவை எந்த தொட்டியில் போடுவது என்று தெரியவில்லையா? புகைப்படம் எடுத்து பரிந்துரையை பெறுங்கள்.",
-        "take_photo": "புகைப்படம் எடுக்க",
-        "upload_photo": "புகைப்படத்தை பதிவேற்ற",
-        "analyze": "கழிவை பகுப்பாய்வு செய்",
-        "detected": "கண்டறியப்பட்ட பொருள்",
-        "category": "பரிந்துரைக்கப்படும் வகை",
-        "confidence": "நம்பகத்தன்மை",
-        "instruction": "சிறந்த முடிவுக்கு ஒரு கழிவுப் பொருளை தெளிவாகக் காட்டவும். கலந்த கழிவு மூட்டை அல்லது குவியலுக்கு முடிவு உறுதியாக இருக்காது.",
-        "uncertain": "நம்பகத்தன்மை குறைவாக உள்ளது. கழிவுகளை பிரித்து ஒரு பொருளாக scan செய்யவும்.",
-        "ai_not_ready": "இந்த deployment-ல் Vision AI கிடைக்கவில்லை. கீழே உள்ள manual waste guide-ஐ பயன்படுத்தலாம்.",
-        "manual_guide": "Manual Waste Guide",
-        "scan_success": "கழிவு வெற்றிகரமாக பகுப்பாய்வு செய்யப்பட்டது.",
-        "camera": "Camera",
-        "photo_upload": "Photo upload"
-    }
+DEFAULT_DATA = {
+    "bins": DEMO_BINS,
+    "reports": DEMO_REPORTS,
+    "analytics": [
+        {"date":datetime.now().strftime("%Y-%m-%d"),"category":"Wet Waste","confidence":92,"area":"Gandhi Road"},
+        {"date":datetime.now().strftime("%Y-%m-%d"),"category":"Dry Waste","confidence":89,"area":"Bus Stand"},
+        {"date":datetime.now().strftime("%Y-%m-%d"),"category":"E-Waste","confidence":94,"area":"Market Area"},
+        {"date":datetime.now().strftime("%Y-%m-%d"),"category":"Sanitary Waste","confidence":87,"area":"Railway Station Road"}
+    ],
+    "assignments": []
 }
-
-
-def t(key):
-    return TEXT[st.session_state.language].get(key, key)
-
-
-# ============================================================
-# DEMO DATABASE
-# ============================================================
-
-def demo_data():
-    return {
-        "bins": [
-            {
-                "id": "BIN001",
-                "area": "Gandhi Road",
-                "fill": 25,
-                "lat": 11.0168,
-                "lon": 76.9558,
-                "sensor": "Online",
-                "hardware": "Healthy",
-                "collection": "Pending"
-            },
-            {
-                "id": "BIN002",
-                "area": "Bus Stand",
-                "fill": 55,
-                "lat": 11.0183,
-                "lon": 76.9725,
-                "sensor": "Online",
-                "hardware": "Healthy",
-                "collection": "Pending"
-            },
-            {
-                "id": "BIN003",
-                "area": "Market Area",
-                "fill": 82,
-                "lat": 11.0046,
-                "lon": 76.9616,
-                "sensor": "Online",
-                "hardware": "Healthy",
-                "collection": "Ready"
-            },
-            {
-                "id": "BIN004",
-                "area": "Railway Station Road",
-                "fill": 95,
-                "lat": 11.0270,
-                "lon": 76.9563,
-                "sensor": "Online",
-                "hardware": "Healthy",
-                "collection": "Ready"
-            }
-        ],
-        "reports": [],
-        "segregation": {
-            "Organic / Wet Waste": 24,
-            "Dry Waste": 18,
-            "Recyclable Waste": 12,
-            "Other / Reject Waste": 4
-        },
-        "assignment": None
-    }
-
-
-# ============================================================
-# FIREBASE
-# ============================================================
 
 def firebase_get():
     try:
-        response = requests.get(
-            FIREBASE_URL + "/econova.json",
-            timeout=TIMEOUT
-        )
-
-        if response.ok:
-            value = response.json()
-
-            if isinstance(value, dict):
-                return value
-
+        r = requests.get(FIREBASE_URL + "/econova.json", timeout=8)
+        if r.ok and isinstance(r.json(), dict):
+            return r.json()
     except Exception:
         pass
-
     return None
 
-
-def firebase_put(data):
+def firebase_save(data):
     try:
-        response = requests.put(
-            FIREBASE_URL + "/econova.json",
-            json=data,
-            timeout=TIMEOUT
-        )
-
-        return response.ok
-
+        r = requests.put(FIREBASE_URL + "/econova.json", json=data, timeout=8)
+        return r.ok
     except Exception:
         return False
 
+if "firebase_loaded" not in st.session_state:
+    remote = firebase_get()
+    if remote:
+        st.session_state.data = remote
+        st.session_state.firebase_ok = True
+    else:
+        st.session_state.data = {k:list(v) for k,v in DEFAULT_DATA.items()}
+        st.session_state.firebase_ok = False
+    st.session_state.firebase_loaded = True
 
-def normalise_data(value):
-    base = demo_data()
+data = st.session_state.data
+data.setdefault("bins", [])
+data.setdefault("reports", [])
+data.setdefault("analytics", [])
+data.setdefault("assignments", [])
+if not data["bins"]:
+    data["bins"] = [dict(x) for x in DEMO_BINS]
+if not data["reports"]:
+    data["reports"] = [dict(x) for x in DEMO_REPORTS]
+if not data["analytics"]:
+    data["analytics"] = [
+        {"date":datetime.now().strftime("%Y-%m-%d"),"category":"Wet Waste","confidence":92,"area":"Gandhi Road"},
+        {"date":datetime.now().strftime("%Y-%m-%d"),"category":"Dry Waste","confidence":89,"area":"Bus Stand"},
+        {"date":datetime.now().strftime("%Y-%m-%d"),"category":"E-Waste","confidence":94,"area":"Market Area"},
+        {"date":datetime.now().strftime("%Y-%m-%d"),"category":"Sanitary Waste","confidence":87,"area":"Railway Station Road"}
+    ]
 
-    if not isinstance(value, dict):
-        return base
+def save():
+    st.session_state.firebase_ok = firebase_save(data)
 
-    if isinstance(value.get("bins"), list):
-        base["bins"] = value["bins"]
-
-    if isinstance(value.get("reports"), list):
-        base["reports"] = value["reports"]
-
-    if isinstance(value.get("segregation"), dict):
-        base["segregation"] = value["segregation"]
-
-    base["assignment"] = value.get("assignment")
-
-    return base
-
-
-def save_data():
-    st.session_state.firebase_ok = firebase_put(
-        st.session_state.data
-    )
-
-
-# ============================================================
-# ROUTE CALCULATION
-# ============================================================
-
-def haversine(lat1, lon1, lat2, lon2):
-    radius = 6371.0
-
-    p1 = math.radians(lat1)
-    p2 = math.radians(lat2)
-
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(p1)
-        * math.cos(p2)
-        * math.sin(dlon / 2) ** 2
-    )
-
-    return radius * 2 * math.asin(
-        math.sqrt(a)
-    )
-
-
-def build_priority_route(bins):
-    depot = (11.0169, 76.9558)
-
-    candidates = []
-
-    for item in bins:
-
-        try:
-            fill = float(item["fill"])
-            lat = float(item["lat"])
-            lon = float(item["lon"])
-        except Exception:
-            continue
-
-        if item.get("collection") == "Collected":
-            continue
-
-        if fill < 50:
-            continue
-
-        candidates.append(
-            {
-                **item,
-                "fill": fill,
-                "lat": lat,
-                "lon": lon
-            }
-        )
-
-    route = []
-    current = depot
-
-    while candidates:
-
-        scored = []
-
-        for item in candidates:
-
-            distance = haversine(
-                current[0],
-                current[1],
-                item["lat"],
-                item["lon"]
-            )
-
-            fill = item["fill"]
-
-            if fill >= 95:
-                urgency = 40
-            elif fill >= 80:
-                urgency = 25
-            elif fill >= 60:
-                urgency = 10
-            else:
-                urgency = 0
-
-            score = (
-                fill * 2
-                + urgency
-                - distance * 8
-            )
-
-            scored.append(
-                (score, distance, item)
-            )
-
-        _, distance, selected = max(
-            scored,
-            key=lambda x: x[0]
-        )
-
-        selected["from_distance"] = round(
-            distance,
-            2
-        )
-
-        route.append(selected)
-
-        current = (
-            selected["lat"],
-            selected["lon"]
-        )
-
-        candidates.remove(selected)
-
-    return route
-
-
-# ============================================================
-# ACTUAL ROAD ROUTING
-# ============================================================
-
-@st.cache_data(ttl=300, show_spinner=False)
-def get_road_route(points):
-
-    if len(points) < 2:
-        return None
-
-    coordinates = ";".join(
-        f"{lon},{lat}"
-        for lat, lon in points
-    )
-
-    url = (
-        "https://router.project-osrm.org/"
-        "route/v1/driving/"
-        f"{coordinates}"
-        "?overview=full"
-        "&geometries=geojson"
-    )
-
-    try:
-
-        response = requests.get(
-            url,
-            timeout=15
-        )
-
-        if not response.ok:
-            return None
-
-        data = response.json()
-
-        if data.get("code") != "Ok":
-            return None
-
-        routes = data.get("routes", [])
-
-        if not routes:
-            return None
-
-        return routes[0]
-
-    except Exception:
-        return None
-
-
-# ============================================================
-# AI WASTE VISION
-# ============================================================
-
+# -------------------- AI WASTE IDENTIFICATION --------------------
 @st.cache_resource(show_spinner=False)
-def load_waste_vision_model():
-    """Load a zero-shot image classifier only when available."""
-    if not VISION_AI_AVAILABLE:
+def ai_model():
+    if pipeline is None:
         return None
     try:
         return pipeline(
@@ -559,1232 +130,379 @@ def load_waste_vision_model():
     except Exception:
         return None
 
+AI_LABELS = [
+    "wet organic waste: food scraps, fruit peel, vegetable waste",
+    "dry waste: paper, cardboard, plastic packaging and other dry household waste",
+    "electronic waste: mobile phone, charger, cable, battery or circuit board",
+    "sanitary waste: sanitary pad, diaper, tissue, mask or other sanitary product"
+]
 
-def classify_waste_image(image):
-    """
-    AI-assisted waste classification.
-    Returns the top candidate, category, confidence and all scores.
-    """
-    model = load_waste_vision_model()
-
+def classify_waste(img):
+    model = ai_model()
     if model is None:
         return None
-
-    candidates = [
-        ("banana peel", "Organic / Wet Waste"),
-        ("vegetable or food waste", "Organic / Wet Waste"),
-        ("food scraps", "Organic / Wet Waste"),
-        ("plastic bottle", "Recyclable Waste"),
-        ("plastic container", "Recyclable Waste"),
-        ("paper or cardboard", "Dry Waste"),
-        ("metal can", "Recyclable Waste"),
-        ("glass bottle", "Recyclable Waste"),
-        ("cloth or textile", "Dry Waste"),
-        ("electronic waste", "Other / Reject Waste"),
-        ("mixed waste bag", "Other / Reject Waste"),
-        ("general garbage", "Other / Reject Waste"),
-    ]
-
-    labels = [item[0] for item in candidates]
-
     try:
-        results = model(image, candidate_labels=labels)
-        if not results:
-            return None
+        result = model(img, candidate_labels=AI_LABELS)
+        top = result[0]
+        label = top["label"].lower()
+        score = float(top["score"]) * 100
 
-        top = results[0]
-        label = top["label"]
-        score = float(top["score"])
+        if "wet" in label or "food" in label or "organic" in label or "fruit" in label or "vegetable" in label:
+            category = "Wet Waste"
+        elif "electronic" in label or "phone" in label or "charger" in label or "circuit" in label or "battery" in label:
+            category = "E-Waste"
+        elif "sanitary" in label or "diaper" in label or "pad" in label or "mask" in label or "tissue" in label:
+            category = "Sanitary Waste"
+        else:
+            category = "Dry Waste"
 
-        category = next(
-            category
-            for candidate, category in candidates
-            if candidate == label
-        )
-
-        return {
-            "item": label.title(),
-            "category": category,
-            "confidence": score,
-            "scores": results,
-        }
+        return top["label"], category, score
     except Exception:
         return None
 
+# -------------------- HELPERS --------------------
+def bin_status(fill):
+    if fill >= 90: return "Critical", "red"
+    if fill >= 75: return "Ready", "yellow"
+    return "Normal", "green"
 
-# ============================================================
-# STATUS
-# ============================================================
+def route_api(points):
+    if len(points) < 2:
+        return None
+    coords = ";".join(f"{lon},{lat}" for lat,lon in points)
+    try:
+        r = requests.get(
+            f"https://router.project-osrm.org/route/v1/driving/{coords}",
+            params={"overview":"full","geometries":"geojson"},
+            timeout=10
+        )
+        if r.ok and r.json().get("routes"):
+            q = r.json()["routes"][0]
+            return q["geometry"], q["distance"]/1000, q["duration"]/60
+    except Exception:
+        pass
+    return None
 
-WORKFLOW = [
-    "Reported",
-    "Verified",
-    "Assigned",
-    "Accepted by Team",
-    "Work Started",
-    "Work in Progress",
-    "Inspection",
-    "Resolved",
-    "Closed"
-]
-
-
-def display_status(report):
-
-    progress = int(
-        report.get("progress", 0)
-    )
-
-    if progress >= 100:
-        return "Resolved"
-
-    return report.get(
-        "status",
-        "Reported"
-    )
-
-
-# ============================================================
-# SESSION STATE
-# ============================================================
-
-if "language" not in st.session_state:
-    st.session_state.language = "English"
-
-if "role" not in st.session_state:
-    st.session_state.role = "User"
-
-if "data" not in st.session_state:
-
-    firebase_data = firebase_get()
-
-    st.session_state.data = normalise_data(
-        firebase_data
-    )
-
-    st.session_state.firebase_ok = (
-        firebase_data is not None
-    )
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
+# -------------------- SIDEBAR / ACCESS --------------------
 with st.sidebar:
-
-    st.title("♻️ EcoNova")
-
-    st.session_state.language = st.selectbox(
-        t("language"),
-        ["English", "Tamil"],
-        index=(
-            0
-            if st.session_state.language == "English"
-            else 1
-        )
-    )
-
-    st.session_state.role = st.selectbox(
-        t("portal"),
-        ["User", "Admin"],
-        index=(
-            0
-            if st.session_state.role == "User"
-            else 1
-        )
-    )
-
-    if st.button(
-        "🔄 " + t("refresh"),
-        use_container_width=True
-    ):
-
-        firebase_data = firebase_get()
-
-        st.session_state.data = normalise_data(
-            firebase_data
-        )
-
-        st.session_state.firebase_ok = (
-            firebase_data is not None
-        )
-
-        st.rerun()
-
-
-# ============================================================
-# HEADER
-# ============================================================
-
-st.title("♻️ EcoNova")
-
-st.caption(
-    t("tagline")
-)
-
-if not st.session_state.firebase_ok:
-
-    st.warning(
-        "Firebase connection unavailable. "
-        "Prototype data is being used."
-    )
-
-
-data = st.session_state.data
-bins = data["bins"]
-reports = data["reports"]
-
-
-# ============================================================
-# NAVIGATION
-# ============================================================
-
-if st.session_state.role == "User":
-
-    pages = [
-        t("home"),
-        t("seg"),
-        t("bins"),
-        t("report"),
-        t("my")
-    ]
-
-else:
-
-    pages = [
-        t("dashboard"),
-        t("seg"),
-        t("bins"),
-        t("issues"),
-        t("route"),
-        t("manage")
-    ]
-
-
-page = st.sidebar.radio(
-    "Menu",
-    pages
-)
-
-
-# ============================================================
-# USER HOME
-# ============================================================
-
-if page == t("home"):
-
-    st.header(
-        t("welcome")
-    )
-
-    st.write(
-        t("description")
-    )
-
-    urgent = sum(
-        float(b.get("fill", 0)) >= 95
-        for b in bins
-    )
-
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric(
-        t("total"),
-        len(bins)
-    )
-
-    c2.metric(
-        t("urgent"),
-        urgent
-    )
-
-    c3.metric(
-        t("open"),
-        sum(
-            int(r.get("progress", 0)) < 100
-            for r in reports
-        )
-    )
-
-    st.info(
-        t("demo_note")
-    )
-
-
-# ============================================================
-# WASTE SEGREGATION
-# ============================================================
-
-elif page == t("seg"):
-
-    st.header(t("waste_check_title"))
-    st.caption(t("waste_check_subtitle"))
-
-    st.info("💡 " + t("instruction"))
-
-    left, right = st.columns(2)
-
-    with left:
-        st.subheader("📷 " + t("take_photo"))
-        camera_image = st.camera_input(t("camera"))
-
-    with right:
-        st.subheader("📁 " + t("upload_photo"))
-        uploaded_image = st.file_uploader(
-            t("photo_upload"),
-            type=["jpg", "jpeg", "png"],
-            key="waste_image_upload"
-        )
-
-    selected_image = camera_image if camera_image is not None else uploaded_image
-
-    if selected_image is not None:
-        if PIL_AVAILABLE:
-            image = Image.open(selected_image).convert("RGB")
-            st.image(
-                image,
-                caption=t("photo_upload"),
-                use_container_width=True
-            )
-
-            if st.button(
-                "🔍 " + t("analyze"),
-                type="primary",
-                use_container_width=True
-            ):
-                with st.spinner("Analyzing..." if st.session_state.language == "English" else "பகுப்பாய்வு செய்கிறது..."):
-                    result = classify_waste_image(image)
-
-                if result is None:
-                    st.warning(t("ai_not_ready"))
-                else:
-                    confidence = result["confidence"]
-
-                    if confidence >= 0.60:
-                        st.success(t("scan_success"))
-
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric(
-                            t("detected"),
-                            result["item"]
-                        )
-                        c2.metric(
-                            t("category"),
-                            result["category"]
-                        )
-                        c3.metric(
-                            t("confidence"),
-                            f"{confidence * 100:.0f}%"
-                        )
-
-                        st.progress(
-                            min(1.0, confidence)
-                        )
-
-                        if confidence < 0.80:
-                            st.warning(t("uncertain"))
-                    else:
-                        st.warning(t("uncertain"))
-        else:
-            st.error("Pillow is required for image analysis.")
-
+    st.markdown('<div style="font-size:28px;font-weight:800">♻️ EcoNova</div><div style="color:#78a18b;font-size:11px;letter-spacing:1px">SMART WASTE • CLEANER CITIES</div>', unsafe_allow_html=True)
+    role = st.radio("Portal", ["Citizen", "Admin"], index=0)
+    if role == "Admin":
+        pages = ["Command Center","Waste Segregation","Location Intelligence","Smart Bins","Alerts","Issue Management","Smart Route Planning","Collection Assignments","Analytics"]
+    else:
+        pages = ["Overview","Waste Segregation","Smart Bins","Location Intelligence","Report Issue","My Reports","Analytics"]
     st.divider()
-
-    st.subheader("🧭 " + t("manual_guide"))
-
-    waste_types = [
-        t("organic"),
-        t("dry"),
-        t("recycle"),
-        t("other")
-    ]
-
-    selected = st.selectbox(
-        t("select"),
-        waste_types,
-        key="manual_waste_type"
-    )
-
-    st.success(
-        f"**{t('recommended')}:** {selected}"
-    )
-
-    st.subheader("📊 Segregation Monitoring")
-
-    stats = data.get(
-        "segregation",
-        {}
-    )
-
-    columns = st.columns(4)
-
-    labels = [
-        t("organic"),
-        t("dry"),
-        t("recycle"),
-        t("other")
-    ]
-
-    keys = [
-        "Organic / Wet Waste",
-        "Dry Waste",
-        "Recyclable Waste",
-        "Other / Reject Waste"
-    ]
-
-    for i in range(4):
-
-        columns[i].metric(
-            labels[i],
-            stats.get(
-                keys[i],
-                0
-            )
-        )
-
-
-# ============================================================
-# SMART BINS
-# ============================================================
-
-elif page == t("bins"):
-
-    st.header(
-        "🗑️ " + t("bins")
-    )
-
-    st.info(
-        t("demo_note")
-    )
-
-    for item in bins:
-
-        fill = float(
-            item.get("fill", 0)
-        )
-
-        if fill >= 95:
-            status = t("full")
-        elif fill >= 75:
-            status = t("ready")
-        else:
-            status = t("normal")
-
-        with st.container(border=True):
-
-            c1, c2, c3, c4 = st.columns(4)
-
-            c1.subheader(
-                item.get("id", "")
-            )
-
-            c1.write(
-                item.get("area", "")
-            )
-
-            c2.metric(
-                t("fill"),
-                f"{fill:.0f}%"
-            )
-
-            c3.write(
-                f"**{t('status')}:** "
-                f"{status}"
-            )
-
-            c3.write(
-                f"**{t('collection')}:** "
-                f"{item.get('collection', 'Pending')}"
-            )
-
-            c4.write(
-                f"**{t('sensor')}:** "
-                f"{item.get('sensor', 'Online')}"
-            )
-
-            c4.write(
-                f"**{t('hardware')}:** "
-                f"{item.get('hardware', 'Healthy')}"
-            )
-
-
-# ============================================================
-# USER REPORT
-# ============================================================
-
-elif page == t("report"):
-
-    st.header(
-        "📢 " + t("report")
-    )
-
-    issue = st.selectbox(
-        t("issue_type"),
-        [
-            t("overflow"),
-            t("unclean"),
-            t("uncollected"),
-            t("sanitation")
-        ]
-    )
-
-    location_mode = st.radio(
-        t("issue_location"),
-        [
-            t("gps"),
-            t("different")
-        ],
-        horizontal=True
-    )
-
-    latitude = None
-    longitude = None
-
-    area = ""
-    street = ""
-    landmark = ""
-
-    if location_mode == t("gps"):
-
-        if GPS_AVAILABLE:
-
-            location = streamlit_geolocation()
-
-            if (
-                isinstance(location, dict)
-                and location.get("latitude") is not None
-                and location.get("longitude") is not None
-            ):
-
-                latitude = float(
-                    location["latitude"]
-                )
-
-                longitude = float(
-                    location["longitude"]
-                )
-
-                st.success(
-                    f"📍 {latitude:.5f}, "
-                    f"{longitude:.5f}"
-                )
-
-            else:
-
-                st.info(
-                    t("gps_permission")
-                )
-
-        else:
-
-            st.info(
-                t("gps_unavailable")
-            )
-
-    if (
-        location_mode == t("different")
-        or latitude is None
-    ):
-
-        c1, c2 = st.columns(2)
-
-        area = c1.text_input(
-            t("area")
-        )
-
-        street = c2.text_input(
-            t("street")
-        )
-
-        landmark = st.text_input(
-            t("landmark")
-        )
-
-    description = st.text_area(
-        t("details")
-    )
-
-    photo = st.file_uploader(
-        t("photo"),
-        type=[
-            "jpg",
-            "jpeg",
-            "png"
-        ]
-    )
-
-    if st.button(
-        "📤 " + t("submit"),
-        type="primary"
-    ):
-
-        has_location = any(
-            [
-                area.strip(),
-                street.strip(),
-                landmark.strip()
-            ]
-        )
-
-        if not description.strip():
-
-            st.error(
-                t("need_description")
-            )
-
-        elif (
-            latitude is None
-            and not has_location
-        ):
-
-            st.error(
-                t("need_location")
-            )
-
-        else:
-
-            report_id = (
-                f"REP"
-                f"{len(reports) + 1:03d}"
-            )
-
-            reports.append(
-                {
-                    "id": report_id,
-                    "issue": issue,
-                    "area": area.strip(),
-                    "street": street.strip(),
-                    "landmark": landmark.strip(),
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "description": description.strip(),
-                    "photo_name": (
-                        photo.name
-                        if photo
-                        else ""
-                    ),
-                    "status": "Reported",
-                    "progress": 0,
-                    "created_at": datetime.now().strftime(
-                        "%Y-%m-%d %H:%M"
-                    )
-                }
-            )
-
-            save_data()
-
-            st.success(
-                t("success")
-            )
-
-
-# ============================================================
-# USER MY REPORTS
-# ============================================================
-
-elif page == t("my"):
-
-    st.header(
-        "📋 " + t("my")
-    )
-
-    if not reports:
-
-        st.info(
-            t("no_reports")
-        )
-
-    for report in reports:
-
-        progress = max(
-            0,
-            min(
-                100,
-                int(
-                    report.get(
-                        "progress",
-                        0
-                    )
-                )
-            )
-        )
-
-        status = display_status(
-            report
-        )
-
-        with st.container(border=True):
-
-            st.subheader(
-                report.get(
-                    "id",
-                    ""
-                )
-            )
-
-            st.write(
-                f"**{t('issue_type')}:** "
-                f"{report.get('issue', '')}"
-            )
-
-            location = ", ".join(
-                x
-                for x in [
-                    report.get("area", ""),
-                    report.get("street", ""),
-                    report.get("landmark", "")
-                ]
-                if x
-            )
-
-            if not location:
-
-                if report.get("latitude") is not None:
-
-                    location = (
-                        f"{float(report['latitude']):.5f}, "
-                        f"{float(report['longitude']):.5f}"
-                    )
-
-            st.write(
-                f"**Location:** "
-                f"{location or 'Not provided'}"
-            )
-
-            st.write(
-                f"**{t('status')}:** "
-                f"{status}"
-            )
-
-            st.progress(
-                progress / 100
-            )
-
-            st.caption(
-                f"{t('progress')}: "
-                f"{progress}%"
-            )
-
-
-# ============================================================
-# ADMIN DASHBOARD
-# ============================================================
-
-elif page == t("dashboard"):
-
-    st.header(
-        "📊 " + t("dashboard")
-    )
-
-    urgent_bins = [
-        b
-        for b in bins
-        if float(b.get("fill", 0)) >= 95
-    ]
-
-    open_issues = [
-        r
-        for r in reports
-        if int(r.get("progress", 0)) < 100
-    ]
-
-    resolved_issues = [
-        r
-        for r in reports
-        if int(r.get("progress", 0)) >= 100
-    ]
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric(
-        t("total"),
-        len(bins)
-    )
-
-    c2.metric(
-        t("urgent"),
-        len(urgent_bins)
-    )
-
-    c3.metric(
-        t("open"),
-        len(open_issues)
-    )
-
-    c4.metric(
-        t("resolved"),
-        len(resolved_issues)
-    )
-
-    st.subheader(
-        "🚨 " + t("alert")
-    )
-
-    if urgent_bins:
-
-        for b in urgent_bins:
-
-            st.error(
-                f"{b['id']} | "
-                f"{b['area']} | "
-                f"{b['fill']}% | "
-                f"{t('full')}"
-            )
-
+    if "page" not in st.session_state or st.session_state.page not in pages:
+        st.session_state.page = pages[0]
+    for pg in pages:
+        if st.button(pg, use_container_width=True, key="nav_"+pg):
+            st.session_state.page = pg
+    st.divider()
+    if st.session_state.firebase_ok:
+        st.success("Firebase connected")
     else:
+        st.warning("Firebase unavailable — demo session data")
+    st.caption("EcoNova Prototype • Software-first • Hardware-ready")
 
-        st.success(
-            t("no_alert")
-        )
+page = st.session_state.page
 
-    st.subheader(
-        "🔧 Hardware & Sensor Monitoring"
-    )
+# One global demo notice only
+st.markdown('<div class="notice">⚠️ DEMO / PROTOTYPE DATA — Hardware sensors are not connected. Bin readings shown are sample values; the same dashboard can receive live sensor data when ESP32/sensors are connected.</div>', unsafe_allow_html=True)
 
-    st.info(
-        t("hardware_note")
-    )
+if role == "Admin":
+    h="EcoNova Command Center"
+    sub="Monitor bins, sanitation reports, collection assignments, analytics and smart routes from one control layer."
+else:
+    h="A cleaner city starts with one smart action."
+    sub="Identify waste, find smart bins, report sanitation issues and track your reports from one simple platform."
 
+st.markdown(f'<div class="hero"><div class="eyebrow">SMART WASTE & SANITATION PLATFORM</div><h1>{h}</h1><p>{sub}</p></div>', unsafe_allow_html=True)
+
+# -------------------- OVERVIEW --------------------
+if page in ["Overview","Command Center"]:
+    bins = data["bins"]; reports = data["reports"]
+    total=len(bins)
+    ready=sum(int(b.get("fill",0))>=75 for b in bins)
+    critical=sum(int(b.get("fill",0))>=90 for b in bins)
+    openr=sum(int(r.get("progress",0))<100 for r in reports)
+    avg=sum(int(b.get("fill",0)) for b in bins)/total if total else 0
+    vals=[("Smart Bins",total,"Registered monitoring points"),("Average Fill",f"{avg:.0f}%","Network snapshot"),("Ready",ready,"Collection attention"),("Critical",critical,"Urgent collection"),("Open Issues",openr,"Being handled")]
+    for col,(a,b,c) in zip(st.columns(5),vals):
+        with col: st.markdown(f'<div class="card"><small>{a}</small><b>{b}</b><span>{c}</span></div>',unsafe_allow_html=True)
+
+    st.markdown('<div class="section"><h2>Everything connected, nothing complicated.</h2><p>Core operations working together.</p></div>',unsafe_allow_html=True)
+    fs=[("📡","Smart Bin Monitoring","Fill-level and sensor status visibility."),("🔔","Automatic Alerts","Critical and ready bins are surfaced for collection."),("🚨","Sanitation Reports","Citizens report overflowing or unclean areas."),("🧭","Smart Collection Routes","Priority stops are sequenced on road routes and assigned."),("♻️","Four-Way Waste Identification","AI-assisted identification for wet, dry, e-waste and sanitary waste.")]
+    for col,(i,a,b) in zip(st.columns(5),fs):
+        with col: st.markdown(f'<div class="feature"><div class="icon">{i}</div><h3>{a}</h3><p>{b}</p></div>',unsafe_allow_html=True)
+
+    st.markdown('<div class="section"><h2>Operations snapshot</h2></div>',unsafe_allow_html=True)
     for b in bins:
+        s,css=bin_status(int(b.get("fill",0)))
+        c1,c2,c3=st.columns([2,5,2])
+        with c1: st.markdown(f"**{b['id']}**"); st.caption(b.get("area",""))
+        with c2:
+            fill=int(b.get("fill",0))
+            st.markdown(f'<div style="display:flex;justify-content:space-between"><span>Fill level</span><b>{fill}%</b></div><div class="progress"><div style="width:{fill}%"></div></div>',unsafe_allow_html=True)
+        with c3: st.markdown(f'<span class="pill {css}">{s}</span>',unsafe_allow_html=True)
 
-        with st.container(border=True):
+# -------------------- WASTE SEGREGATION --------------------
+elif page=="Waste Segregation":
+    st.markdown('<div class="section"><h2>♻️ AI Waste Identification — Four-Way Segregation</h2><p>Use the browser camera directly or upload one clear waste-item photo. Camera permission is the only browser permission needed.</p></div>',unsafe_allow_html=True)
 
-            a, c, d, e = st.columns(4)
+    c1,c2 = st.columns(2)
+    with c1:
+        cam = st.camera_input("📷 Turn on camera")
+    with c2:
+        up = st.file_uploader("Upload photo", type=["jpg","jpeg","png"])
 
-            a.write(
-                f"**{b['id']}**"
-            )
-
-            c.write(
-                f"{t('fill')}: "
-                f"{b.get('fill', 0)}%"
-            )
-
-            d.write(
-                f"{t('sensor')}: "
-                f"{b.get('sensor', 'Online')}"
-            )
-
-            e.write(
-                f"{t('hardware')}: "
-                f"{b.get('hardware', 'Healthy')}"
-            )
-
-
-# ============================================================
-# ADMIN ISSUE REPORTS
-# ============================================================
-
-elif page == t("issues"):
-
-    st.header(
-        "📋 " + t("issues")
-    )
-
-    if not reports:
-
-        st.info(
-            t("no_reports")
-        )
-
-    for i, report in enumerate(
-        reports
-    ):
-
-        current = display_status(
-            report
-        )
-
-        with st.container(border=True):
-
-            st.subheader(
-                report.get(
-                    "id",
-                    ""
-                )
-            )
-
-            st.write(
-                f"**{t('issue_type')}:** "
-                f"{report.get('issue', '')}"
-            )
-
-            st.write(
-                f"**{t('details')}:** "
-                f"{report.get('description', '')}"
-            )
-
-            c1, c2 = st.columns(2)
-
-            status = c1.selectbox(
-                t("status"),
-                WORKFLOW,
-                index=(
-                    WORKFLOW.index(current)
-                    if current in WORKFLOW
-                    else 0
-                ),
-                key=f"status_{i}"
-            )
-
-            progress = c2.slider(
-                t("progress"),
-                0,
-                100,
-                int(
-                    report.get(
-                        "progress",
-                        0
-                    )
-                ),
-                key=f"progress_{i}"
-            )
-
-            if st.button(
-                t("status_update"),
-                key=f"update_{i}"
-            ):
-
-                report["progress"] = progress
-
-                if progress >= 100:
-                    report["status"] = "Resolved"
+    f = cam or up
+    if f and Image:
+        img = Image.open(f).convert("RGB")
+        st.image(img, width=430)
+        if st.button("🔎 Analyze Waste", type="primary", use_container_width=True):
+            with st.spinner("AI is analyzing the waste..."):
+                result = classify_waste(img)
+            if result:
+                item,cat,conf=result
+                a,b,c=st.columns(3)
+                a.metric("Detected", item.title())
+                b.metric("Segregation", cat)
+                c.metric("Confidence", f"{conf:.1f}%")
+                if conf < 55:
+                    st.warning("Low confidence. Please show one waste item clearly and scan again.")
+                elif conf < 75:
+                    st.info("Moderate confidence. Confirm the item before disposal.")
                 else:
-                    report["status"] = status
-
-                save_data()
-
-                st.success(
-                    "Updated"
-                )
-
-                st.rerun()
-
-
-# ============================================================
-# SMART ROUTE PLANNING
-# ============================================================
-
-elif page == t("route"):
-
-    st.header(
-        "🚛 " + t("route")
-    )
-
-    st.write(
-        t("route_note")
-    )
-
-    route = build_priority_route(
-        bins
-    )
-
-    if not route:
-
-        st.success(
-            t("no_route")
-        )
-
-    else:
-
-        st.subheader(
-            "📋 Collection Sequence"
-        )
-
-        st.write(
-            "Collection Depot → "
-            + " → ".join(
-                b["id"]
-                for b in route
-            )
-        )
-
-        for i, b in enumerate(
-            route,
-            start=1
-        ):
-
-            if b["fill"] >= 95:
-                priority = "URGENT"
-            elif b["fill"] >= 75:
-                priority = "HIGH"
+                    st.success("AI identification completed. Follow local municipal disposal rules.")
+                data["analytics"].append({"date":datetime.now().strftime("%Y-%m-%d"),"category":cat,"confidence":conf,"area":"Unspecified"})
+                save()
             else:
-                priority = "MEDIUM"
+                st.error("AI model is not available on the server. Please make sure the deployment installs transformers, torch and safetensors and can download the CLIP model. The camera does not require a file download; it opens directly in the browser after Camera permission is allowed.")
+    st.markdown('<div class="section"><h2>Four-way disposal guide</h2></div>',unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame([
+        ["Wet Waste","Food scraps, vegetable/fruit waste","Organic / composting"],
+        ["Dry Waste","Paper, cardboard, clean dry packaging","Dry/recyclable stream"],
+        ["E-Waste","Phones, chargers, electronics, circuit boards","Authorized e-waste collection"],
+        ["Sanitary Waste","Diapers, sanitary pads, masks and similar waste","Separate sanitary disposal"],
+    ],columns=["Category","Examples","Recommended handling"]),use_container_width=True,hide_index=True)
+    st.caption("For mixed waste, separate items first. A single photo cannot reliably identify every item in a mixed bag.")
 
-            with st.container(
-                border=True
-            ):
+# -------------------- SMART BINS --------------------
+elif page=="Smart Bins":
+    st.markdown('<div class="section"><h2>🗑️ Smart Bin Monitoring</h2><p>Admin can manage registered bins; citizens can view public bin status.</p></div>',unsafe_allow_html=True)
+    q=st.text_input("Search Bin ID or Area",placeholder="BIN003 / Market Area").lower()
+    found=[b for b in data["bins"] if not q or q in b["id"].lower() or q in b.get("area","").lower()]
+    for b in found:
+        fill=int(b.get("fill",0));s,css=bin_status(fill)
+        c1,c2,c3=st.columns([2,5,2])
+        with c1: st.markdown(f"### {b['id']}"); st.caption("📍 "+b.get("area","")); st.markdown(f'<span class="pill {css}">{s}</span>',unsafe_allow_html=True)
+        with c2: st.markdown(f'<div style="display:flex;justify-content:space-between"><span>Fill level</span><b>{fill}%</b></div><div class="progress"><div style="width:{fill}%"></div></div>',unsafe_allow_html=True); st.caption(f"Sensor: {b.get('sensor','Unknown')}")
+        with c3: st.metric("Collection",b.get("collection","Pending"))
+        st.divider()
 
-                a, c, d, e = st.columns(4)
+    if role=="Admin":
+        st.markdown('<div class="section"><h2>Admin Bin Management</h2></div>',unsafe_allow_html=True)
+        with st.expander("➕ Register New Bin"):
+            bid=st.text_input("Bin ID")
+            area=st.text_input("Area / Street")
+            fill=st.number_input("Initial fill %",0,100,0)
+            lat=st.number_input("Latitude",format="%.6f")
+            lon=st.number_input("Longitude",format="%.6f")
+            if st.button("Register Bin",type="primary"):
+                if bid and area:
+                    data["bins"].append({"id":bid.upper(),"area":area,"fill":fill,"lat":lat,"lon":lon,"sensor":"Online","collection":"Scheduled","assigned_vehicle":"Not assigned","assigned_person":"Not assigned"})
+                    save(); st.success("Bin registered and saved to Firebase."); st.rerun()
 
-                a.subheader(
-                    f"{t('stop')} {i}"
+# -------------------- LOCATION --------------------
+elif page=="Location Intelligence":
+    st.markdown('<div class="section"><h2>📍 Location Intelligence</h2><p>Search a registered bin or area and inspect its operational location on the map.</p></div>',unsafe_allow_html=True)
+    q=st.text_input("Search location or Bin ID",placeholder="Gandhi Road / BIN001").lower()
+    found=[b for b in data["bins"] if not q or q in b["id"].lower() or q in b.get("area","").lower()]
+    if found:
+        b=found[0]
+        a,c,d,e=st.columns(4);a.metric("Bin ID",b["id"]);c.metric("Area",b.get("area",""));d.metric("Fill",f"{b.get('fill',0)}%");e.metric("Sensor",b.get("sensor",""))
+        m=folium.Map([b["lat"],b["lon"]],zoom_start=15)
+        for x in data["bins"]:
+            folium.Marker([x["lat"],x["lon"]],tooltip=f"{x['id']} • {x.get('area','')}",popup=f"Fill: {x.get('fill',0)}%").add_to(m)
+        st_folium(m,width=None,height=450,returned_objects=[])
+    else:
+        st.info("No registered smart bin found.")
+
+# -------------------- CITIZEN REPORT --------------------
+elif page=="Report Issue":
+    st.markdown('<div class="section"><h2>🚨 Report a Sanitation Issue</h2><p>Report overflowing bins, uncollected waste and sanitation problems.</p></div>',unsafe_allow_html=True)
+    typ=st.selectbox("Issue type",["Overflowing bin","Uncollected waste","Unclean area","Sanitation issue","Damaged bin","Other"])
+    loc_mode=st.radio("Issue location",["Current location","Different location"],horizontal=True)
+    if loc_mode=="Current location":
+       loc=""
+    st.caption("📍 Allow location access to detect your current area automatically.")
+
+    try:
+        from streamlit_geolocation import streamlit_geolocation
+        g=streamlit_geolocation()
+
+        if g and g.get("latitude") is not None and g.get("longitude") is not None:
+
+            lat = g["latitude"]
+            lon = g["longitude"]
+
+            try:
+                response = requests.get(
+                    "https://nominatim.openstreetmap.org/reverse",
+                    params={
+                        "lat": lat,
+                        "lon": lon,
+                        "format": "json"
+                    },
+                    headers={"User-Agent": "EcoNova"}
                 )
 
-                c.write(
-                    f"**{b['id']}**"
+                address = response.json().get("address", {})
+
+                area = (
+                    address.get("suburb")
+                    or address.get("neighbourhood")
+                    or address.get("road")
+                    or "Not available"
                 )
 
-                c.write(
-                    b["area"]
+                city = (
+                    address.get("city")
+                    or address.get("town")
+                    or address.get("village")
+                    or "Not available"
                 )
 
-                d.write(
-                    f"{t('fill')}: "
-                    f"{b['fill']:.0f}%"
-                )
+                state = address.get("state", "Not available")
+                country = address.get("country", "Not available")
 
-                e.write(
-                    f"{t('priority')}: "
-                    f"{priority}"
-                )
+                loc = f"{area}, {city}, {state}, {country}"
 
-        # ----------------------------------------------------
-        # ACTUAL ROAD MAP
-        # ----------------------------------------------------
+                st.success("📍 Current location detected")
+                st.write(f"**Area:** {area}")
+                st.write(f"**City:** {city}")
+                st.write(f"**State:** {state}")
+                st.write(f"**Country:** {country}")
 
-        points = [
-            (11.0169, 76.9558)
-        ]
+            except Exception:
+                loc = f"{lat:.5f}, {lon:.5f}"
+                st.warning("Location detected, but place name could not be retrieved.")
 
-        points.extend(
-            [
-                (
-                    b["lat"],
-                    b["lon"]
-                )
-                for b in route
-            ]
-        )
+        else:
+            st.info("Waiting for location permission…")
 
-        road = get_road_route(
-            points
-        )
+    except Exception as e:
+        st.error(f"Location component error: {e}")
+    else:
+        loc=st.text_input("Area / Street / Landmark",placeholder="Example: Gandhi Road near bus stop")
+    desc=st.text_area("What happened?",placeholder="Briefly describe the issue...")
+    if st.button("Submit Report",type="primary",use_container_width=True):
+        rid=f"REP{len(data['reports'])+1:03d}"
+        data["reports"].insert(0,{"id":rid,"type":typ,"location":loc or "Not provided","description":desc or "No description","status":"Reported","progress":0,"reported":datetime.now().strftime("%d %b, %H:%M"),"assigned_team":"Not assigned","assigned_person":"Not assigned"})
+        ok=save()
+        st.success(f"{rid} submitted successfully." + (" Saved to Firebase." if ok else ""))
 
+# -------------------- MY REPORTS --------------------
+elif page=="My Reports":
+    st.markdown('<div class="section"><h2>📋 My Reports</h2><p>Track sanitation reports from reporting to closure.</p></div>',unsafe_allow_html=True)
+    for r in data["reports"]:
+        p=min(100,int(r.get("progress",0)))
+        s="Resolved" if p>=100 else r.get("status","Reported")
+        st.markdown(f"**{r['id']} — {r.get('type','')}** · {r.get('location','')}")
+        st.caption(f"Assigned: {r.get('assigned_team','Not assigned')} / {r.get('assigned_person','Not assigned')}")
+        st.progress(p/100,text=f"{s} • {p}%")
+        st.divider()
+
+# -------------------- ALERTS --------------------
+elif page=="Alerts":
+    st.markdown('<div class="section"><h2>🔔 Automatic Alerts</h2><p>Alerts are generated from bin fill thresholds.</p></div>',unsafe_allow_html=True)
+    critical=[b for b in data["bins"] if int(b.get("fill",0))>=90]
+    ready=[b for b in data["bins"] if 75<=int(b.get("fill",0))<90]
+    if critical:
+        st.error(f"{len(critical)} critical bin(s) need urgent collection.")
+        for b in critical: st.write(f"**{b['id']} — {b.get('area','')}** • {b.get('fill',0)}%")
+    else: st.success("No critical bins right now.")
+    if ready: st.warning("Approaching capacity: "+", ".join(b["id"] for b in ready))
+
+# -------------------- ISSUE MANAGEMENT --------------------
+elif page=="Issue Management":
+    st.markdown('<div class="section"><h2>🛠️ Issue Management</h2><p>Assign sanitation reports to responsible teams and track a clear operational workflow.</p></div>',unsafe_allow_html=True)
+    teams=["Sanitation Team A","Sanitation Team B","Municipal Response Team","Emergency Clean-up Team"]
+    people=["Ravi Kumar","Arun Team","Priya Team","Karthik Officer"]
+    statuses=["Reported","Verified","Assigned","Accepted","Work Started","Work in Progress","Inspection","Resolved","Closed"]
+
+    for r in data["reports"]:
+        with st.expander(f"{r['id']} • {r.get('type','')} • {r.get('location','')}"):
+            st.write(r.get("description",""))
+            a,b,c=st.columns(3)
+            with a: team=st.selectbox("Responsible team",teams,index=teams.index(r.get("assigned_team")) if r.get("assigned_team") in teams else 0,key="team_"+r["id"])
+            with b: person=st.selectbox("Responsible person",people,index=people.index(r.get("assigned_person")) if r.get("assigned_person") in people else 0,key="person_"+r["id"])
+            with c: status_val=st.selectbox("Status",statuses,index=statuses.index(r.get("status")) if r.get("status") in statuses else 0,key="status_"+r["id"])
+            progress=st.slider("Work progress",0,100,int(r.get("progress",0)),key="prog_"+r["id"])
+            if st.button("Save Assignment & Progress",key="saveissue_"+r["id"],type="primary"):
+                r["assigned_team"]=team;r["assigned_person"]=person;r["progress"]=progress;r["status"]="Resolved" if progress>=100 else status_val
+                save();st.success("Issue assignment and progress saved to Firebase.");st.rerun()
+
+# -------------------- SMART ROUTE --------------------
+elif page=="Smart Route Planning":
+    st.markdown('<div class="section"><h2>🧭 Smart Collection Route</h2><p>Prioritize bins by urgency, create a practical road route, then assign the collection run to a vehicle and personnel.</p></div>',unsafe_allow_html=True)
+    priority=sorted([b for b in data["bins"] if int(b.get("fill",0))>=75],key=lambda x:int(x.get("fill",0)),reverse=True)
+    vehicles=["EV-01","EV-02","Truck-03","Mini-Tipper-01"]
+    people=["Ravi Kumar","Arun Team","Karthik Officer","Collection Team C"]
+    if not priority:
+        st.success("No priority bins.")
+    else:
+        depot=(11.0169,76.9558)
+        pts=[depot]+[(b["lat"],b["lon"]) for b in priority]
+        road=route_api(pts)
+        a,b,c=st.columns(3);a.metric("Priority bins",len(priority));b.metric("Road distance",f"{road[1]:.1f} km" if road else "Unavailable");c.metric("Drive time",f"{road[2]:.0f} min" if road else "Unavailable")
+        for i,x in enumerate(priority,1):
+            st.write(f"**{i}. {x['id']} — {x.get('area','')}** • {x.get('fill',0)}% • Current assignment: {x.get('assigned_vehicle','Not assigned')} / {x.get('assigned_person','Not assigned')}")
+        m=folium.Map(depot,zoom_start=14);folium.Marker(depot,tooltip="Collection Depot").add_to(m)
+        for i,x in enumerate(priority,1):folium.Marker([x["lat"],x["lon"]],tooltip=f"Stop {i}: {x['id']}").add_to(m)
         if road:
-
-            st.subheader(
-                "🗺️ " + t("route_map")
-            )
-
-            center_lat = sum(
-                p[0]
-                for p in points
-            ) / len(points)
-
-            center_lon = sum(
-                p[1]
-                for p in points
-            ) / len(points)
-
-            map_object = folium.Map(
-                location=[
-                    center_lat,
-                    center_lon
-                ],
-                zoom_start=14
-            )
-
-            folium.Marker(
-                points[0],
-                tooltip="Collection Depot"
-            ).add_to(
-                map_object
-            )
-
-            for i, b in enumerate(
-                route,
-                start=1
-            ):
-
-                folium.Marker(
-                    [
-                        b["lat"],
-                        b["lon"]
-                    ],
-                    tooltip=(
-                        f"Stop {i} - "
-                        f"{b['id']} - "
-                        f"{b['fill']}%"
-                    )
-                ).add_to(
-                    map_object
-                )
-
-            geometry = road[
-                "geometry"
-            ][
-                "coordinates"
-            ]
-
-            road_line = [
-                (
-                    lat,
-                    lon
-                )
-                for lon, lat
-                in geometry
-            ]
-
-            folium.PolyLine(
-                road_line,
-                weight=5
-            ).add_to(
-                map_object
-            )
-
-            st_folium(
-                map_object,
-                use_container_width=True,
-                height=500
-            )
-
-            c1, c2 = st.columns(2)
-
-            c1.metric(
-                t("distance"),
-                f"{road['distance'] / 1000:.2f} km"
-            )
-
-            c2.metric(
-                t("time"),
-                f"{road['duration'] / 60:.0f} min"
-            )
-
+            coords=road[0]["coordinates"];folium.PolyLine([(lat,lon) for lon,lat in coords],weight=6).add_to(m)
         else:
+            folium.PolyLine(pts,weight=4,dash_array="8").add_to(m)
+            st.warning("Road routing service unavailable; priority sequence is still shown.")
+        st_folium(m,width=None,height=500,returned_objects=[])
 
-            st.warning(
-                "Road routing service is unavailable right now. "
-                "The priority sequence is still available."
-            )
+        st.markdown('<div class="section"><h2>Assign collection run</h2></div>',unsafe_allow_html=True)
+        v=st.selectbox("Collection vehicle",vehicles)
+        p=st.selectbox("Collection personnel",people)
+        reason="Priority based on fill level and urgency; critical bins are handled first."
+        st.info(reason)
+        if st.button("Assign Route & Save",type="primary",use_container_width=True):
+            stamp=datetime.now().strftime("%Y-%m-%d %H:%M")
+            for x in priority:
+                x["assigned_vehicle"]=v;x["assigned_person"]=p;x["collection"]="Assigned"
+            data["assignments"].append({"type":"Collection Route","vehicle":v,"person":p,"bins":[x["id"] for x in priority],"reason":reason,"created":stamp})
+            save();st.success(f"Route assigned to {v} and {p}. Saved to Firebase.");st.rerun()
 
-        # ----------------------------------------------------
-        # ASSIGN TEAM
-        # ----------------------------------------------------
+# -------------------- COLLECTION ASSIGNMENTS --------------------
+elif page=="Collection Assignments":
+    st.markdown('<div class="section"><h2>🚛 Collection Assignments</h2><p>See which vehicle and collection personnel are responsible for each bin/run.</p></div>',unsafe_allow_html=True)
+    rows=[{"Bin":b["id"],"Area":b.get("area",""),"Fill %":b.get("fill",0),"Collection":b.get("collection",""),"Vehicle":b.get("assigned_vehicle","Not assigned"),"Personnel":b.get("assigned_person","Not assigned")} for b in data["bins"]]
+    st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+    for a in reversed(data["assignments"]):
+        st.info(f"{a.get('created','')} • {a.get('type','')} • Vehicle: {a.get('vehicle','')} • Personnel: {a.get('person','')} • Reason: {a.get('reason','')}")
 
-        st.subheader(
-            "👷 " + t("team")
-        )
+# -------------------- ANALYTICS --------------------
+elif page=="Analytics":
+    st.markdown('<div class="section"><h2>📊 Waste Analytics</h2><p>Area-wise and time-based segregation analytics from recorded AI identifications.</p></div>',unsafe_allow_html=True)
+    records=data["analytics"]
+    if records:
+        df=pd.DataFrame(records)
+        df["date"]=pd.to_datetime(df["date"])
+        period=st.selectbox("Period",["Daily","Weekly","Monthly"])
+        if period=="Daily": df["period"]=df["date"].dt.strftime("%Y-%m-%d")
+        elif period=="Weekly": df["period"]=df["date"].dt.to_period("W").astype(str)
+        else: df["period"]=df["date"].dt.to_period("M").astype(str)
+        pivot=df.groupby(["period","category"]).size().unstack(fill_value=0)
+        st.bar_chart(pivot)
+        st.dataframe(pivot,use_container_width=True)
+    else:
+        st.info("Analytics will appear after AI waste identifications are recorded.")
+    st.caption("The prototype records AI identification events. Municipality-wide analytics become richer as more verified disposal records are collected.")
 
-        team = st.selectbox(
-            t("team"),
-            [
-                "Municipality Team A",
-                "Municipality Team B",
-                "Collection Vehicle 01"
-            ]
-        )
-
-        if st.button(
-            "🚛 " + t("assign"),
-            type="primary"
-        ):
-
-            data["assignment"] = {
-                "team": team,
-                "bins": [
-                    b["id"]
-                    for b in route
-                ],
-                "time": datetime.now().strftime(
-                    "%Y-%m-%d %H:%M"
-                )
-            }
-
-            save_data()
-
-            st.success(
-                t("assigned")
-            )
-
-
-# ============================================================
-# MANAGE BINS
-# ============================================================
-
-elif page == t("manage"):
-
-    st.header(
-        "🗑️ " + t("manage")
-    )
-
-    c1, c2 = st.columns(2)
-
-    new_id = c1.text_input(
-        t("bin_id")
-    )
-
-    new_area = c2.text_input(
-        t("bin_location")
-    )
-
-    new_fill = st.number_input(
-        t("initial_fill"),
-        min_value=0,
-        max_value=100,
-        value=0,
-        step=1
-    )
-
-    if st.button(
-        "💾 " + t("save"),
-        type="primary"
-    ):
-
-        new_id = new_id.strip()
-        new_area = new_area.strip()
-
-        if not new_id or not new_area:
-
-            st.error(
-                t("required_bin")
-            )
-
-        elif any(
-            str(b.get("id", "")).lower()
-            == new_id.lower()
-            for b in bins
-        ):
-
-            st.error(
-                t("exists")
-            )
-
-        else:
-
-            bins.append(
-                {
-                    "id": new_id,
-                    "area": new_area,
-                    "fill": int(new_fill),
-
-                    # Demo coordinates.
-                    # Real hardware can provide actual coordinates.
-                    "lat": 11.0168,
-                    "lon": 76.9558,
-
-                    "sensor": "Online",
-                    "hardware": "Healthy",
-                    "collection": "Pending"
-                }
-            )
-
-            save_data()
-
-            st.success(
-                "Saved"
-            )
-
-            st.rerun()
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.divider()
-
-st.caption(
-    "EcoNova • Smart Waste Segregation, Disposal & Improved Sanitation"
-)
+st.markdown('<div class="footer">EcoNova • Smart Waste & Sanitation • Software-first, hardware-ready • Firebase-backed prototype</div>',unsafe_allow_html=True)
