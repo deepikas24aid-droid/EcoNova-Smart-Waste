@@ -300,19 +300,154 @@ elif page=="Smart Bins":
         with c3: st.metric("Collection",b.get("collection","Pending"))
         st.divider()
 
-    if role=="Admin":
-        st.markdown('<div class="section"><h2>Admin Bin Management</h2></div>',unsafe_allow_html=True)
-        with st.expander("➕ Register New Bin"):
-            bid=st.text_input("Bin ID")
-            area=st.text_input("Area / Street")
-            fill=st.number_input("Initial fill %",0,100,0)
-            lat=st.number_input("Latitude",format="%.6f")
-            lon=st.number_input("Longitude",format="%.6f")
-            if st.button("Register Bin",type="primary"):
-                if bid and area:
-                    data["bins"].append({"id":bid.upper(),"area":area,"fill":fill,"lat":lat,"lon":lon,"sensor":"Online","collection":"Scheduled","assigned_vehicle":"Not assigned","assigned_person":"Not assigned"})
-                    save(); st.success("Bin registered and saved to Firebase."); st.rerun()
+    if role == "Admin":
 
+        st.markdown(
+            '<div class="section"><h2>Admin Bin Management</h2></div>',
+            unsafe_allow_html=True
+        )
+
+        # ================= REGISTER NEW BIN =================
+        with st.expander("➕ Register New Bin"):
+
+            bid = st.text_input(
+                "Bin ID",
+                placeholder="Example: BIN005"
+            )
+
+            area = st.text_input(
+                "Area / Street / Location",
+                placeholder="Example: Surampatti Valasu, Erode, Tamil Nadu"
+            )
+
+            fill = st.number_input(
+                "Initial fill %",
+                min_value=0,
+                max_value=100,
+                value=0
+            )
+
+            if st.button("Register Bin", type="primary"):
+
+                if not bid or not area:
+                    st.warning("Please enter both Bin ID and Location.")
+
+                else:
+                    try:
+                        search_location = area.strip()
+
+                        if "india" not in search_location.lower():
+                            search_location += ", India"
+
+                        response = requests.get(
+                            "https://nominatim.openstreetmap.org/search",
+                            params={
+                                "q": search_location,
+                                "format": "jsonv2",
+                                "addressdetails": 1,
+                                "countrycodes": "in",
+                                "limit": 1,
+                                "accept-language": "en"
+                            },
+                            headers={
+                                "User-Agent": "EcoNova"
+                            },
+                            timeout=10
+                        )
+
+                        results = response.json()
+
+                        if results:
+
+                            result = results[0]
+
+                            lat = float(result["lat"])
+                            lon = float(result["lon"])
+
+                            new_bin = {
+                                "id": bid.upper().strip(),
+                                "area": area,
+                                "fill": fill,
+                                "lat": lat,
+                                "lon": lon,
+                                "sensor": "Online",
+                                "collection": "Scheduled",
+                                "assigned_vehicle": "Not assigned",
+                                "assigned_person": "Not assigned"
+                            }
+
+                            # Check existing Bin ID
+                            existing = next(
+                                (
+                                    x for x in data["bins"]
+                                    if x["id"].upper() == bid.upper().strip()
+                                ),
+                                None
+                            )
+
+                            if existing:
+                                existing.update(new_bin)
+                                message = "Bin updated successfully."
+                            else:
+                                data["bins"].append(new_bin)
+                                message = "New bin registered successfully."
+
+                            save()
+
+                            st.success(
+                                f"📍 Location found: {result.get('display_name', area)}"
+                            )
+
+                            st.success(f"✅ {message}")
+
+                            st.rerun()
+
+                        else:
+                            st.error(
+                                "❌ Location not found. Please enter a complete location."
+                            )
+
+                    except Exception as e:
+                        st.error(f"Location mapping error: {e}")
+
+
+        # ================= DELETE BIN =================
+        with st.expander("🗑️ Delete Bin"):
+
+            if data["bins"]:
+
+                bin_options = [
+                    f"{b['id']} — {b.get('area', 'Unknown')}"
+                    for b in data["bins"]
+                ]
+
+                selected_bin = st.selectbox(
+                    "Select Bin to Delete",
+                    bin_options
+                )
+
+                selected_id = selected_bin.split(" — ")[0]
+
+                if st.button(
+                    "Delete Selected Bin",
+                    type="secondary"
+                ):
+
+                    data["bins"] = [
+                        b for b in data["bins"]
+                        if b["id"] != selected_id
+                    ]
+
+                    save()
+
+                    st.success(
+                        f"🗑️ {selected_id} deleted successfully."
+                    )
+
+                    st.rerun()
+
+            else:
+                st.info("No registered bins available.")
 # -------------------- LOCATION --------------------
 elif page=="Location Intelligence":
     st.markdown('<div class="section"><h2>📍 Location Intelligence</h2><p>Search a registered bin or area and inspect its operational location on the map.</p></div>',unsafe_allow_html=True)
